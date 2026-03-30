@@ -1,0 +1,20 @@
+local UIS = game:GetService("UserInputService")
+local RS = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+
+local remote = RS:FindFirstChild("F2MorphEvent") or Instance.new("RemoteEvent")
+remote.Name = "F2MorphEvent"
+remote.Parent = RS
+
+if RunService:IsServer() then
+    remote.OnServerEvent:Connect(function()
+        require(119819780800418).MorphMonster("igot473", "organator")
+    end)
+else
+    UIS.InputBegan:Connect(function(input, processed)
+        if processed then return end
+        if input.KeyCode == Enum.KeyCode.F2 then
+            remote:FireServer()
+        end
+    end)
+end
