@@ -1,0 +1,276 @@
+-- Song Guess Auto-Highlight
+-- Automatically highlights the correct answer option
+-- Press F2 to DISABLE (cannot be re-enabled without re-running script)
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+-- State
+local enabled = true
+local correctSongName = nil
+local highlightedButton = nil
+local highlightStroke = nil
+local highlightGlow = nil
+
+-- Colors
+local HIGHLIGHT_COLOR = Color3.fromRGB(48, 224, 44) -- Green (matches the game's correct color)
+local GLOW_COLOR = Color3.fromRGB(48, 224, 44)
+
+-- F2 disables the highlight permanently
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.KeyCode == Enum.KeyCode.F2 then
+        enabled = false
+        -- Clean up any existing highlight immediately
+        if highlightStroke and highlightStroke.Parent then
+            highlightStroke.Parent = nil
+        end
+        if highlightGlow and highlightGlow.Parent then
+            highlightGlow.Parent = nil
+        end
+        highlightedButton = nil
+        correctSongName = nil
+    end
+end)
+
+-- Find the SongGuess RemoteFunction
+local function getRemote()
+    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+    if not remotes then return nil end
+    return remotes:FindFirstChild("SongGuess")
+end
+
+-- Hook the RemoteFunction to intercept question data
+local function hookRemote()
+    local remote = getRemote()
+    if not remote or not remote:IsA("RemoteFunction") then
+        warn("[SongGuessHighlight] Could not find SongGuess RemoteFunction")
+        return
+    end
+
+    local originalInvoke = remote.InvokeServer
+
+    remote.InvokeServer = function(self, action, data)
+        local result = originalInvoke(self, action, data)
+
+        if not enabled then
+            return result
+        end
+
+        -- Capture correct answer from Start response
+        if action == "Start" and typeof(result) == "table" and result.success then
+            if result.question and typeof(result.question.songName) == "string" then
+                correctSongName = result.question.songName
+            end
+        end
+
+        -- Capture correct answer from Answer response (nextQuestion)
+        if action == "Answer" and typeof(result) == "table" and result.success then
+            if result.nextQuestion and typeof(result.nextQuestion.songName) == "string" then
+                correctSongName = result.nextQuestion.songName
+            end
+        end
+
+        return result
+    end
+end
+
+-- Find the correct answer button based on the song name
+local function findCorrectButton()
+    local songGuessGui = PlayerGui:FindFirstChild("SongGuess")
+    if not songGuessGui then return nil end
+
+    local answersFrame = songGuessGui:FindFirstChild("AnswersFrame")
+    if not answersFrame then return nil end
+
+    -- Look through all answer buttons
+    for i = 1, 6 do
+        local button = answersFrame:FindFirstChild("AnswerButton" .. i, true)
+        if button and button:IsA("TextButton") and button.Visible then
+            -- Check the CoverImage's Image property to match the song
+            -- The button text or child Text label may contain the song name
+            -- But the game sets button.Text = "" and uses a child Text label
+            -- We need to check the t4 mapping - but that's internal to the other script
+            -- Instead, we can check the CoverImage's Image against the song definition
+
+            -- The most reliable way: check if the button has a CoverImage whose Image
+            -- matches the correct song's image ID
+            local coverImage = button:FindFirstChild("CoverImage")
+            if coverImage and coverImage:IsA("ImageLabel") and coverImage.Image ~= "" then
+                -- Try to get the song image for the correct answer
+                local songDisplayUtil = ReplicatedStorage:FindFirstChild("Modules")
+                if songDisplayUtil then
+                    songDisplayUtil = songDisplayUtil:FindFirstChild("SongDisplayUtil")
+                    if songDisplayUtil then
+                        local ok, util = pcall(function()
+                            return require(songDisplayUtil)
+                        end)
+                        if ok and util then
+                            local _, def = util.GetSongDefinition(correctSongName)
+                            if def and def.ImageId and coverImage.Image == def.ImageId then
+                                return button
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return nil
+end
+
+-- Apply highlight to a button
+local function applyHighlight(button)
+    if not button or not button.Parent then return end
+
+    -- Remove previous highlight if any
+    if highlightStroke and highlightStroke.Parent then
+        highlightStroke.Parent = nil
+    end
+    if highlightGlow and highlightGlow.Parent then
+        highlightGlow.Parent = nil
+    end
+
+    -- Create a green UIStroke for the highlight
+    highlightStroke = Instance.new("UIStroke")
+    highlightStroke.Name = "SongGuessHighlightStroke"
+    highlightStroke.Color = HIGHLIGHT_COLOR
+    highlightStroke.Thickness = 3
+    highlightStroke.Transparency = 0
+    highlightStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    highlightStroke.Parent = button
+
+    -- Create a subtle glow frame behind the button
+    highlightGlow = Instance.new("Frame")
+    highlightGlow.Name = "SongGuessHighlightGlow"
+    highlightGlow.AnchorPoint = button.AnchorPoint
+    highlightGlow.Position = button.Position
+    highlightGlow.Size = UDim2.new(button.Size.X.Scale, button.Size.X.Offset + 6, button.Size.Y.Scale, button.Size.Y.Offset + 6)
+    highlightGlow.Rotation = button.Rotation
+    highlightGlow.BackgroundColor3 = GLOW_COLOR
+    highlightGlow.BackgroundTransparency = 0.75
+    highlightGlow.BorderSizePixel = 0
+    highlightGlow.ZIndex = button.ZIndex - 1
+
+    local corner = button:FindFirstChildOfClass("UICorner")
+    local uiCorner = Instance.new("UICorner")
+    if corner then
+        uiCorner.CornerRadius = corner.CornerRadius
+    else
+        uiCorner.CornerRadius = UDim.new(0.06, 0)
+    end
+    uiCorner.Parent = highlightGlow
+
+    highlightGlow.Parent = button.Parent
+
+    -- Animate a pulsing glow effect
+    spawn(function()
+        while highlightGlow and highlightGlow.Parent and enabled do
+            TweenService:Create(highlightGlow, TweenInfo.new(0.8, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {
+                BackgroundTransparency = 0.85
+            }):Play()
+            task.wait(0.8)
+            if not (highlightGlow and highlightGlow.Parent and enabled) then break end
+            TweenService:Create(highlightGlow, TweenInfo.new(0.8, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {
+                BackgroundTransparency = 0.65
+            }):Play()
+            task.wait(0.8)
+        end
+    end)
+
+    highlightedButton = button
+end
+
+-- Clean up highlight
+local function cleanupHighlight()
+    if highlightStroke and highlightStroke.Parent then
+        highlightStroke.Parent = nil
+    end
+    if highlightGlow and highlightGlow.Parent then
+        highlightGlow.Parent = nil
+    end
+    highlightedButton = nil
+end
+
+-- Main loop: watch for answer buttons and highlight the correct one
+local lastCorrectName = nil
+local lastButtonFound = nil
+
+RunService.RenderStepped:Connect(function()
+    if not enabled then return end
+    if not correctSongName then return end
+
+    -- Only re-scan when the correct song changes
+    if correctSongName == lastCorrectName and highlightedButton and highlightedButton.Parent and highlightedButton.Visible then
+        return
+    end
+
+    -- Try to find the correct button
+    local button = findCorrectButton()
+    if button then
+        if button ~= lastButtonFound then
+            applyHighlight(button)
+            lastButtonFound = button
+            lastCorrectName = correctSongName
+        end
+    end
+end)
+
+-- Also watch for when buttons get reset (new question) to clean up
+local songGuessGui = PlayerGui:FindFirstChild("SongGuess")
+if songGuessGui then
+    local answersFrame = songGuessGui:FindFirstChild("AnswersFrame")
+    if answersFrame then
+        answersFrame.ChildAdded:Connect(function(child)
+            if not enabled then return end
+            if child.Name:match("^AnswerButton") then
+                -- A new button appeared, might need to re-highlight
+                task.wait(0.1)
+                if correctSongName and enabled then
+                    local button = findCorrectButton()
+                    if button then
+                        applyHighlight(button)
+                        lastButtonFound = button
+                        lastCorrectName = correctSongName
+                    end
+                end
+            end
+        end)
+    end
+end
+
+-- Initialize the remote hook
+hookRemote()
+
+-- Also try to detect the correct answer by monitoring the SongGuess GUI visibility
+-- When the game starts, the AnswersFrame becomes visible
+local function onAnswersFrameVisible()
+    if not enabled then return end
+    if not correctSongName then return end
+    task.wait(0.2) -- Small delay for buttons to populate
+    local button = findCorrectButton()
+    if button then
+        applyHighlight(button)
+        lastButtonFound = button
+        lastCorrectName = correctSongName
+    end
+end
+
+-- Watch for AnswersFrame becoming visible
+if songGuessGui then
+    local answersFrame = songGuessGui:FindFirstChild("AnswersFrame")
+    if answersFrame then
+        answersFrame:GetPropertyChangedSignal("Visible"):Connect(function()
+            if answersFrame.Visible and enabled then
+                onAnswersFrameVisible()
+            end
+        end)
+    end
+end
