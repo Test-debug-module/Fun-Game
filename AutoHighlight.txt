@@ -1,6 +1,7 @@
 -- Song Guess Auto-Highlight
 -- Automatically highlights the correct answer option
--- Press F2 to DISABLE (cannot be re-enabled without re-running script)
+-- Press F2 to DISABLE highlight (cannot be re-enabled without re-running script)
+-- Press F3 to TOGGLE auto-click the correct answer
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -17,6 +18,9 @@ local correctSongName = nil
 local highlightedButton = nil
 local highlightStroke = nil
 local highlightGlow = nil
+local autoClick = false
+local autoClickDebounce = false
+local lastAutoClickSong = nil
 
 -- Colors
 local HIGHLIGHT_COLOR = Color3.fromRGB(48, 224, 44) -- Green (matches the game's correct color)
@@ -27,6 +31,7 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed then return end
     if input.KeyCode == Enum.KeyCode.F2 then
         enabled = false
+        autoClick = false
         -- Clean up any existing highlight immediately
         if highlightStroke and highlightStroke.Parent then
             highlightStroke.Parent = nil
@@ -36,6 +41,10 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
         end
         highlightedButton = nil
         correctSongName = nil
+    elseif input.KeyCode == Enum.KeyCode.F3 then
+        autoClick = not autoClick
+        autoClickDebounce = false
+        lastAutoClickSong = nil
     end
 end)
 
@@ -199,6 +208,51 @@ local function cleanupHighlight()
     highlightedButton = nil
 end
 
+-- Auto-click the correct answer button using VirtualInputManager
+local VirtualInputManager = game:GetService("VirtualInputManager")
+
+local function tryAutoClick(button)
+    if not autoClick then return end
+    if not button or not button.Parent then return end
+    if autoClickDebounce then return end
+    if correctSongName == lastAutoClickSong then return end
+
+    -- Wait for the button to be interactable (answers are disabled during snippet playback)
+    local maxWait = 15
+    local waited = 0
+    while not button.Active and waited < maxWait do
+        task.wait(0.1)
+        waited = waited + 0.1
+        if not autoClick then return end
+        if not button or not button.Parent then return end
+    end
+
+    if not button.Active then return end
+
+    -- Small random delay for a natural feel (0.1-0.4s)
+    task.wait(math.random(10, 40) / 100)
+
+    if not autoClick then return end
+    if not button or not button.Parent or not button.Active then return end
+
+    autoClickDebounce = true
+    lastAutoClickSong = correctSongName
+
+    -- Simulate a mouse click at the button's center
+    local absPos = button.AbsolutePosition
+    local absSize = button.AbsoluteSize
+    local x = absPos.X + absSize.X / 2
+    local y = absPos.Y + absSize.Y / 2
+
+    VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
+    VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
+
+    -- Reset debounce after enough time for the next question
+    task.delay(3, function()
+        autoClickDebounce = false
+    end)
+end
+
 -- Main loop: watch for answer buttons and highlight the correct one
 local lastCorrectName = nil
 local lastButtonFound = nil
@@ -219,6 +273,8 @@ RunService.RenderStepped:Connect(function()
             applyHighlight(button)
             lastButtonFound = button
             lastCorrectName = correctSongName
+            -- Auto-click if enabled
+            task.spawn(tryAutoClick, button)
         end
     end
 end)
@@ -239,6 +295,8 @@ if songGuessGui then
                         applyHighlight(button)
                         lastButtonFound = button
                         lastCorrectName = correctSongName
+                        -- Auto-click if enabled
+                        task.spawn(tryAutoClick, button)
                     end
                 end
             end
@@ -260,6 +318,8 @@ local function onAnswersFrameVisible()
         applyHighlight(button)
         lastButtonFound = button
         lastCorrectName = correctSongName
+        -- Auto-click if enabled
+        task.spawn(tryAutoClick, button)
     end
 end
 
